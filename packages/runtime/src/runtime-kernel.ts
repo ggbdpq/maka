@@ -197,6 +197,12 @@ export interface RuntimeKernelLike {
    * from an arbitrary one of them.
    */
   runningTurnIds?(sessionId: string): string[];
+  /**
+   * Bumped every time a run enters or leaves the session's active set, so two
+   * same-revision catalog reads can be ordered by their live run state even
+   * when a turn started or ended between them (#5713).
+   */
+  sessionRunEpoch?(sessionId: string): number;
   hasActiveRun?(sessionId: string, runId: string, turnId?: string): boolean;
   requestRunHandoff?(
     sessionId: string,
@@ -2183,6 +2189,16 @@ export class RuntimeKernel implements RuntimeKernelLike {
     return [...new Set(this.activeRunsFor(sessionId).map((run) => run.turnId))];
   }
 
+  #sessionRunEpochs = new Map<string, number>();
+
+  sessionRunEpoch(sessionId: string): number {
+    return this.#sessionRunEpochs.get(sessionId) ?? 0;
+  }
+
+  #bumpSessionRunEpoch(sessionId: string): void {
+    this.#sessionRunEpochs.set(sessionId, (this.#sessionRunEpochs.get(sessionId) ?? 0) + 1);
+  }
+
   hasActiveRun(sessionId: string, runId: string, turnId?: string): boolean {
     return this.activeRunsFor(sessionId).some(
       (run) => run.runId === runId && (turnId === undefined || run.turnId === turnId),
@@ -2721,6 +2737,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
     }
     active.activeRuns.set(run.runId, run);
     active.turnToRunId.set(run.turnId, run.runId);
+    this.#bumpSessionRunEpoch(active.sessionId);
   }
 
   private assertRunCanDispatch(run: AgentRun, backend: AgentBackend): void {
@@ -2748,6 +2765,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
     if (active.turnToRunId.get(run.turnId) === run.runId) {
       active.turnToRunId.delete(run.turnId);
     }
+    this.#bumpSessionRunEpoch(active.sessionId);
   }
 
   private async unregisterParentRun(active: AgentRunActiveSession, run: AgentRun): Promise<void> {
